@@ -3,7 +3,6 @@ import {defaultConvertHandler} from "./index";
 import clear from "clear";
 import chalk from "chalk";
 import figlet from "figlet";
-import modeToString from "./helpers/modeToString";
 
 /**
  * Renders the control screen
@@ -33,7 +32,7 @@ export default async function renderControlScreen() {
         chalk.yellowBright(
             "Mode:"
         ),
-        `${modeToString(defaultConvertHandler.dmxInterface?.currentMode ?? 0)}`)
+        `${defaultConvertHandler.dmxInterface?.getModeDescription() ?? "Unknown"}`)
     console.log("=================")
 
     const artnetInSparkline = Sparkline(defaultConvertHandler.artnetInCountHistory, "req/sec");

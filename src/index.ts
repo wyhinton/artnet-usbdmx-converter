@@ -22,9 +22,11 @@ async function main() {
         defaultConfigStorage.loadConfig(argv["config"]);
     }
 
+    defaultConvertHandler.debug = argv["debug"] === true;
+
     setTerminalTitle("ArtNet => USBDMX")
 
-    defaultConvertHandler.scanForInterfaces();
+    await defaultConvertHandler.scanForInterfaces();
 
     const selectedInfo = defaultConfigStorage.getInterface() ?? await renderStartupScreen();
 
@@ -38,7 +40,12 @@ async function main() {
     console.log(chalk.yellow(
         "Please accept any firewall requests"
     ))
-    defaultConvertHandler.startArtNetReceiver();
+    // interfaces speaking the Enttec Pro protocol don't support DMX input yet, so there's nothing
+    // for the Art-Net sender to forward - starting it anyway would just broadcast an empty keep-alive
+    // frame that other Art-Net nodes (e.g. consoles) can flag as an address conflict
+    const selectedInterfaceInfo = defaultConvertHandler.availableInterfaces.find((e) => e.serial === selectedInfo.serial);
+    const supportsUSBDMXInput = selectedInterfaceInfo?.protocol !== "enttec-serial";
+    defaultConvertHandler.startArtNetReceiver(supportsUSBDMXInput);
 
     console.log(
         chalk.blueBright(
@@ -58,9 +65,16 @@ async function main() {
         console.log(
             chalk.green("✅ System ready")
         );
-        renderControlScreenTimer = setInterval(() => {
-            renderControlScreen();
-        }, 1000)
+        if (defaultConvertHandler.debug) {
+            console.log(
+                chalk.yellow("Debug mode enabled - printing DMX values as they are sent to the interface. Press Ctrl+C to exit.")
+            );
+        }
+        else {
+            renderControlScreenTimer = setInterval(() => {
+                renderControlScreen();
+            }, 1000)
+        }
     }
 }
 

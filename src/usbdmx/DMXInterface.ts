@@ -1,4 +1,7 @@
 import HID from "node-hid";
+import {DMXCommand, IDMXInterface} from "./IDMXInterface";
+import modeToString from "../helpers/modeToString";
+import {describeInterfaceReturnCode, pipelineLog, pipelineWarn} from "../helpers/pipelineLog";
 
 /*
 Return codes
@@ -13,7 +16,7 @@ Return codes
 /**
  * Represents a connected DMX interface and handles all communication with it
  */
-class DMXInterface {
+class DMXInterface implements IDMXInterface {
 
     path: string;
     serial: string;
@@ -22,6 +25,7 @@ class DMXInterface {
     currentMode = 0;
     hidDevice: HID.HID;
     dmxout: number[];
+    debug = false;
 
     usbdmxInputCallback: (start: number, values: number[]) => void;
 
@@ -45,6 +49,7 @@ class DMXInterface {
             for (let i = 1; i < 33; i++) {
                 values.push(data[i]);
             }
+            pipelineLog(this.debug, "HID-IN", `page=${data[0]} (channels ${data[0] * 32 + 1}-${data[0] * 32 + 32}) values=[${values.join(",")}]`);
             this.usbdmxInputCallback(data[0] * 32, values);
 
         })
@@ -73,6 +78,7 @@ class DMXInterface {
      * Closes the HID connection to the interface
      */
     close = () => {
+        pipelineLog(this.debug, "LIFECYCLE", `closing HID interface ${this.serial} (${this.path})`);
         this.setMode(0);
         this.hidDevice.close();
     }
@@ -120,11 +126,40 @@ class DMXInterface {
         try {
             this.hidDevice.write(_buffer);
             this.currentMode = mode;
+            pipelineLog(this.debug, "LIFECYCLE", `set mode to ${mode} (${modeToString(mode)})`);
             return 0;
         }
         catch (err) {
             console.log(err);
             return 5;
+        }
+    }
+
+    /**
+     * Returns a human-readable description of the interface's current mode
+     */
+    getModeDescription = (): string => {
+        return modeToString(this.currentMode);
+    }
+
+    /**
+     * Sends the given 32-channel "pages" (0-15) of {@link dmxout} to the interface, one HID
+     * report per page. node-hid's write() is a synchronous/blocking call, so only sending pages
+     * that actually changed (rather than always sending all 16) matters a lot for output latency
+     * during fast-changing content like a chase.
+     */
+    private sendPages = (pages: Iterable<number>): void => {
+        for (const page of pages) {
+            const _buffer = Buffer.alloc(34);
+            // first byte needs to be 0 according to node-hid documentation (reportId)
+            _buffer[0] = 0x00;
+            // set second byte to page number
+            _buffer[1] = page;
+            for (let j = 2; j < 34; j++) {
+                // get value for corresponding channel (page * 32 for the page)
+                _buffer[j] = this.dmxout[(page * 32) + j - 2];
+            }
+            this.hidDevice.write(_buffer);
         }
     }
 
@@ -139,10 +174,12 @@ class DMXInterface {
             // update dmx out array with new values
             for (const _entry of data) {
                 if (_entry.channel < 1 || _entry.channel > 512) {
+                    pipelineWarn("WRITE", `dropping command for out-of-range channel ${_entry.channel}`);
                     returnStatus = 1;
                     continue;
                 }
                 if (_entry.value < 0 || _entry.value > 255) {
+                    pipelineWarn("WRITE", `dropping out-of-range value ${_entry.value} for channel ${_entry.channel}`);
                     returnStatus = 2;
                     continue;
                 }
@@ -150,42 +187,50 @@ class DMXInterface {
             }
         }
 
-        // loop through the 16 "pages" of commands (each write command can hold 32 channels)
-        for (let i = 0; i < 16; i++) {
-            const _buffer = Buffer.alloc(34);
-            // first byte needs to be 0 according to node-hid documentation (reportId)
-            _buffer[0] = 0x00;
-            // set second byte to page number
-            _buffer[1] = i;
-            for (let j = 2; j < 34; j++) {
-                // get value for corresponding channel (i * 32 for the page)
-                _buffer[j] = this.dmxout[(i * 32) + j - 2];
-            }
-            this.hidDevice.write(_buffer);
-        }
+        // loop through all 16 "pages" (each write command can hold 32 channels)
+        this.sendPages(Array.from({length: 16}, (_, i) => i));
+        pipelineLog(this.debug, "WRITE", `wrote 512 channels to HID interface ${this.serial} across 16 pages (status=${describeInterfaceReturnCode(returnStatus)})`);
         return returnStatus;
 
     }
 
     /**
-     * Writes an entire universe to the interface
+     * Writes an entire universe to the interface. Only the 32-channel "page(s)" that actually
+     * changed since the last write are resent, since each page is a separate blocking USB write -
+     * resending all 16 on every update (regardless of how many channels actually changed) added
+     * up to real output latency during fast-changing content like a chase.
      * @param array Array of all DMX values with a length of 512
      */
     writeMap = (array: number[]): number => {
-        if (array.length !== 512) return 4;
+        if (array.length !== 512) {
+            pipelineWarn("WRITE", `writeMap called with ${array.length} channels instead of 512 - dropping frame entirely`);
+            return 4;
+        }
+
+        const dirtyPages = new Set<number>();
+        for (let page = 0; page < 16; page++) {
+            for (let ch = 0; ch < 32; ch++) {
+                const index = page * 32 + ch;
+                if (this.dmxout[index] !== array[index]) {
+                    dirtyPages.add(page);
+                    break;
+                }
+            }
+        }
+
         this.dmxout = array;
-        this.write(undefined);
+
+        if (dirtyPages.size === 0) {
+            pipelineLog(this.debug, "WRITE", "writeMap called but no channels actually changed - nothing sent to the interface");
+            return 0;
+        }
+
+        this.sendPages(dirtyPages);
+        pipelineLog(this.debug, "WRITE", `wrote ${dirtyPages.size}/16 changed page(s) to HID interface ${this.serial}`);
         return 0;
     }
 
 }
 
-/**
- * Data structure containing a pair of a DMX channel and its value
- */
-interface DMXCommand {
-    channel: number;
-    value: number;
-}
-
-export { DMXInterface, DMXCommand };
+export { DMXInterface };
+export type { DMXCommand };

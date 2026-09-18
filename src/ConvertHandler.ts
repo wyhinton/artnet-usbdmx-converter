@@ -1,7 +1,9 @@
 import {dmxnet, receiver, sender} from "dmxnet";
-import {DetectedInterface, DMXInterface, getConnectedInterfaces} from "./usbdmx";
+import {DetectedInterface, DMXInterface, EnttecProInterface, getConnectedInterfaces, IDMXInterface} from "./usbdmx";
 import {clearInterval} from "timers";
 import {defaultConfigStorage} from "./index";
+import chalk from "chalk";
+import {describeInterfaceReturnCode, pipelineLog, pipelineWarn} from "./helpers/pipelineLog";
 
 /**
  * Responsible for converting incoming Art-Net data to an USBDMX output
@@ -15,8 +17,11 @@ export default class ConvertHandler {
 
     availableInterfaces: DetectedInterface[] = [];
 
-    dmxInterface: DMXInterface | undefined;
+    dmxInterface: IDMXInterface | undefined;
     outputAllowed = false;
+
+    /** When true, prints the DMX values as they are written to the interface */
+    debug = false;
 
     dataPerSecTimer: NodeJS.Timeout;
 
@@ -32,11 +37,22 @@ export default class ConvertHandler {
 
     /**
      * Starts up the Art-Net receiver
+     * @param enableSender Whether to also start the Art-Net sender used for the USBDMX-In -> Art-Net-Out
+     * direction. dmxnet's sender broadcasts a keep-alive ArtDmx frame once a second even when there's nothing
+     * to send, which other Art-Net nodes (e.g. consoles) can flag as an address conflict - so this should stay
+     * off for interfaces that don't support DMX input, such as {@link EnttecProInterface}.
      */
-    startArtNetReceiver = () => {
+    startArtNetReceiver = (enableSender = true) => {
         this.dmxnetManager = new dmxnet(defaultConfigStorage.getDmxNetConfig());
         this.artNetReceiver = this.dmxnetManager.newReceiver(defaultConfigStorage.getDmxNetReceiverConfig());
-        this.artNetSender = this.dmxnetManager.newSender(defaultConfigStorage.getDmxNetSenderConfig());
+        pipelineLog(this.debug, "LIFECYCLE", `ArtNet receiver started (${JSON.stringify(defaultConfigStorage.getDmxNetReceiverConfig())})`);
+        if (enableSender) {
+            this.artNetSender = this.dmxnetManager.newSender(defaultConfigStorage.getDmxNetSenderConfig());
+            pipelineLog(this.debug, "LIFECYCLE", `ArtNet sender started (${JSON.stringify(defaultConfigStorage.getDmxNetSenderConfig())})`);
+        }
+        else {
+            pipelineLog(this.debug, "LIFECYCLE", "ArtNet sender disabled for this interface - USBDMX-In -> ArtNet-Out is off");
+        }
         this.artNetReceiver.on("data", this.handleIncomingArtNetData);
     }
 
@@ -47,13 +63,37 @@ export default class ConvertHandler {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     handleIncomingArtNetData = (data: any) => {
         this.artnetInCounter++;
+        pipelineLog(this.debug, "ARTNET-IN", `frame #${this.artnetInCounter} received (${data.length} channels)`);
+
         if (JSON.stringify(data) != JSON.stringify(this.recentDMXArray)) {
+            pipelineLog(this.debug, "DEDUP", `frame #${this.artnetInCounter} differs from last frame - forwarding`);
             if (this.dmxInterface && this.outputAllowed) {
                 this.usbdmxOutCounter++;
-                this.dmxInterface.writeMap(data);
+                if (this.debug) {
+                    this.printDMXDebug(data);
+                }
+                const writeResult = this.dmxInterface.writeMap(data);
+                if (writeResult !== 0) {
+                    pipelineWarn("WRITE", `frame #${this.artnetInCounter} was not written to the interface (${describeInterfaceReturnCode(writeResult)})`);
+                }
+            }
+            else {
+                pipelineLog(this.debug, "DEDUP", `frame #${this.artnetInCounter} dropped - dmxInterface=${!!this.dmxInterface} outputAllowed=${this.outputAllowed}`);
             }
             this.recentDMXArray = data;
         }
+        else {
+            pipelineLog(this.debug, "DEDUP", `frame #${this.artnetInCounter} identical to last frame - skipping`);
+        }
+    }
+
+    /**
+     * Prints every DMX channel value about to be written to the interface
+     * @param data DMX data about to be written to the interface
+     */
+    private printDMXDebug = (data: number[]) => {
+        const values = data.map((value, i) => `Ch${i + 1}=${value}`);
+        console.log(chalk.magenta(`[${new Date().toISOString()}]`), chalk.magenta("[WRITE]"), values.join(" "));
     }
 
     /**
@@ -63,22 +103,36 @@ export default class ConvertHandler {
      */
     sendIncomingUSBDMXData = (startChannel: number, data: number[]) => {
         this.usbdmxInCounter++;
-        if (this.outputAllowed) {
+        pipelineLog(this.debug, "USBDMX-IN", `received ${data.length} channels starting at ${startChannel + 1} (frame #${this.usbdmxInCounter})`);
+
+        if (this.outputAllowed && this.artNetSender) {
+            let skipped = 0;
             for (let i = 0; i < data.length; i++) {
                 if ((startChannel + i) >= 0 && (startChannel + i) < 512 && data[i] >= 0 && data[i] < 256) {
                     this.artNetSender.prepChannel(startChannel + i, data[i]);
                 }
+                else {
+                    skipped++;
+                }
+            }
+            if (skipped > 0) {
+                pipelineWarn("USBDMX-IN", `skipped ${skipped} out-of-range channel(s) starting at ${startChannel + 1}`);
             }
             this.artnetOutCounter++;
             this.artNetSender.transmit();
+            pipelineLog(this.debug, "ARTNET-OUT", `transmitted universe (frame #${this.artnetOutCounter}, ${data.length - skipped} channel(s) updated from channel ${startChannel + 1})`);
+        }
+        else {
+            pipelineLog(this.debug, "USBDMX-IN", `frame dropped - outputAllowed=${this.outputAllowed} artNetSender=${!!this.artNetSender}`);
         }
     }
 
     /**
      * Gets available DMX interfaces connected to the computer
      */
-    scanForInterfaces = (): DetectedInterface[] => {
-        this.availableInterfaces = getConnectedInterfaces();
+    scanForInterfaces = async (): Promise<DetectedInterface[]> => {
+        this.availableInterfaces = await getConnectedInterfaces();
+        pipelineLog(this.debug, "LIFECYCLE", `found ${this.availableInterfaces.length} interface(s): ${this.availableInterfaces.map((i) => `${i.serial} (${i.protocol})`).join(", ") || "none"}`);
         return this.availableInterfaces;
     }
 
@@ -96,10 +150,16 @@ export default class ConvertHandler {
         const interfaceIndex = this.availableInterfaces.findIndex((e) => e.serial == serial);
         if (interfaceIndex === -1) return "Interface not found, please scan again";
 
-        const interfacePath = this.availableInterfaces[interfaceIndex].path;
+        const detectedInterface = this.availableInterfaces[interfaceIndex];
+        const interfacePath = detectedInterface.path;
+
+        pipelineLog(this.debug, "LIFECYCLE", `opening ${detectedInterface.protocol} interface ${serial} at ${interfacePath} with mode ${mode}`);
 
         try {
-            this.dmxInterface = await DMXInterface.open(interfacePath, serial, manufacturer, product);
+            this.dmxInterface = detectedInterface.protocol === "enttec-serial"
+                ? await EnttecProInterface.open(interfacePath, serial, manufacturer, product)
+                : await DMXInterface.open(interfacePath, serial, manufacturer, product);
+            this.dmxInterface.debug = this.debug;
             this.dmxInterface.usbdmxInputCallback = this.sendIncomingUSBDMXData;
             return new Promise<string>((resolve) => {
                 setTimeout( () => {
@@ -108,11 +168,13 @@ export default class ConvertHandler {
                     const response = this.dmxInterface.setMode(parseInt(mode));
                     this.outputAllowed = true;
                     this.dataPerSecTimer = setInterval(this.parseRequestTimer, 1000);
+                    pipelineLog(this.debug, "LIFECYCLE", `interface ${serial} ready (${describeInterfaceReturnCode(response)}) - output allowed`);
                     resolve(response === 0 ? "" : `Error Code ${response}`);
                 }, 1000);
             })
         }
         catch(err) {
+            pipelineWarn("LIFECYCLE", `failed to open interface ${serial}: ${(err as Error).message}`);
             console.log(err);
             return (err as Error).message;
         }
@@ -123,6 +185,7 @@ export default class ConvertHandler {
      */
     closeInterface = () => {
         if (this.dmxInterface) {
+            pipelineLog(this.debug, "LIFECYCLE", `closing interface ${this.dmxInterface.serial}`);
             this.dmxInterface.close();
             this.outputAllowed = false;
             clearInterval(this.dataPerSecTimer);

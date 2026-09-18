@@ -1,0 +1,26 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "yarn dev",
+            "type": "shell",
+            "command": "yarn dev",
+            "problemMatcher": [
+                "$tsc"
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            }
+        },
+        {
+            "label": "yarn dev (debug)",
+            "type": "shell",
+            "command": "yarn dev --debug",
+            "problemMatcher": [
+                "$tsc"
+            ],
+            "group": "build"
+        }
+    ]
+}

@@ -55,6 +55,12 @@ $ sudo udevadm control --reload-rules
 - [Nodle R4S](https://www.dmxcontrol.de/interfaces/nodle-r4s-interface.html) (DMXControl e.V.)
 - Technically any interface that uses the [usbdmx driver](https://github.com/fx5/usbdmx) by Frank Sievertsen
   - Won't work out of the box, vendor ID and product ID need to be [added manually](./src/usbdmx/index.ts)
+- ENTTEC DMX USB PRO, and other interfaces that speak the same open "DMX USB PRO API" protocol (e.g. DMXKing widgets)
+  - Output only (DMX In on these widgets is not currently forwarded to Art-Net)
+  - Detected automatically over the FTDI virtual serial port, no udev rule needed on Linux - just make sure your
+    user is in the `dialout` group (`sudo usermod -a -G dialout $USER`, then log out and back in)
+  - Other FTDI-based widgets using this protocol can be added by extending `ENTTEC_SERIAL_INTERFACES` in
+    [`./src/usbdmx/index.ts`](./src/usbdmx/index.ts)
 
 # Automatic restart
 
@@ -62,6 +68,12 @@ To restart the program automatically in case of a crash or another exception, ad
 This does not apply in the following cases:
 - Intentional exit (Crtl+C, "kill" command, closing the terminal)
 - Invalid configuration file
+
+# Debug Mode
+To print the DMX channels/values as they are sent to the interface (useful for confirming data is arriving from
+your console and checking your channel mapping), add `--debug` as a command line argument. This replaces the live
+dashboard screen with a scrolling log, since the dashboard clears the terminal every second.
+
 # Configuration File
 You can optionally add a configuration file containing parameters for the default USBDMX interface
 and options regarding the ArtNet transceiver.

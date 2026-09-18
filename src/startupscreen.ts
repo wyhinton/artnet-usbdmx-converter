@@ -78,6 +78,18 @@ export default async function renderStartupScreen(): Promise<StartupScreenRespon
     }
     else {
         const selectedInterface = interfaceSelectionResponse.interfaceserial.serial as string;
+        const selectedInterfaceInfo = scannedInterfaces.find((e) => e.serial === selectedInterface);
+
+        // interfaces speaking the Enttec Pro protocol have no HID-style "mode" concept -
+        // they're always in continuous PC Out -> DMX Out operation, so skip the prompt
+        if (selectedInterfaceInfo?.protocol === "enttec-serial") {
+            return {
+                serial: selectedInterface,
+                mode: "0",
+                manufacturer: selectedInterfaceInfo?.manufacturer,
+                product: selectedInterfaceInfo?.product
+            }
+        }
 
         const modeScelectionResponse = await inquirer.prompt(
             [
@@ -97,8 +109,8 @@ export default async function renderStartupScreen(): Promise<StartupScreenRespon
         return {
             serial: selectedInterface,
             mode: selectedMode,
-            manufacturer: scannedInterfaces.find((e) => e.serial === selectedInterface)?.manufacturer,
-            product: scannedInterfaces.find((e) => e.serial === selectedInterface)?.product
+            manufacturer: selectedInterfaceInfo?.manufacturer,
+            product: selectedInterfaceInfo?.product
         }
     }
 }
