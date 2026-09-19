@@ -8,6 +8,19 @@ Send incoming ArtNet signals to the FX5 DMX interface (and other [compatible int
 This application opens an ArtNet receiver, to which various DMX control programs (e.g. ChamSys MagicQ) can send DMX signals to.
 It then forwards these signals to the FX5 USBDMX interface, and therefore opens it up to a variety of programs, not only the few that support it (QLC+, DMXControl).
 
+# Setup in ChamSys MagicQ
+
+In MagicQ's DMX I/O view, set the universe you want to use to output Art-Net and make sure it uses
+Net 0 / Sub-Net 0 / Universe 0, which is what the converter listens on by default
+(change `dmxnet.receiver` in the [configuration file](#configuration-file) if you use a different address).
+
+Set the output to **Broadcast**. In testing, MagicQ's Unicast output did not reach the converter, while Broadcast did.
+
+If nothing arrives, run the converter with [`--debug`](#debug-mode) to see whether values are coming in.
+MagicQ can broadcast to `2.255.255.255` (Art-Net's legacy fallback range) instead of your network's real broadcast
+address, e.g. `192.168.0.255`. Packets sent there don't reach devices on a normal LAN, so check the destination
+address of MagicQ's Art-Net packets (e.g. in Wireshark) if Broadcast doesn't work either.
+
 # Setup on Linux
 
 To use USBDMX-Interfaces on Linux without root privileges you need to add a udev rule:
