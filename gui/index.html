@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>ArtNet → USBDMX</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main>
+    <header>
+        <h1>ArtNet → USBDMX</h1>
+        <span class="status" id="status" data-state="idle"><i></i><span id="status-text">Stopped</span></span>
+    </header>
+
+    <section class="card">
+        <label for="interface">Interface</label>
+        <div class="row">
+            <select id="interface"></select>
+            <button type="button" id="rescan" class="secondary" title="Rescan for interfaces" aria-label="Rescan for interfaces">↻</button>
+        </div>
+
+        <div id="mode-group">
+            <label for="mode">Mode</label>
+            <select id="mode"></select>
+        </div>
+    </section>
+
+    <button type="button" id="toggle" class="primary" disabled>Start</button>
+    <p class="error" id="error" role="alert" hidden></p>
+
+    <label class="check">
+        <input type="checkbox" id="auto-start">
+        Start automatically when the app opens
+    </label>
+
+    <section class="card rates">
+        <h2>Frames per second</h2>
+        <dl>
+            <div><dt>Art-Net in</dt><dd id="rate-artnet-in">0</dd></div>
+            <div><dt>DMX out</dt><dd id="rate-usbdmx-out">0</dd></div>
+            <div class="input-only"><dt>DMX in</dt><dd id="rate-usbdmx-in">0</dd></div>
+            <div class="input-only"><dt>Art-Net out</dt><dd id="rate-artnet-out">0</dd></div>
+        </dl>
+    </section>
+
+    <footer>
+        <span id="receiver-address"></span>
+        <span id="version"></span>
+    </footer>
+</main>
+<script src="renderer.js"></script>
+</body>
+</html>
